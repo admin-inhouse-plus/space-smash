@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>うちゅうスマッシュ！</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: "Hiragino Maru Gothic ProN", "ヒラギノ丸ゴ ProN W4", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  h1 {
+    color: #ffe44d;
+    text-shadow: 0 0 20px #ff8c00, 3px 3px 0 #ff4081;
+    font-size: 36px;
+    margin-bottom: 10px;
+    letter-spacing: 4px;
+  }
+  #gameContainer {
+    position: relative;
+    border: 4px solid #4a90ff;
+    border-radius: 12px;
+    box-shadow: 0 0 40px #4a90ff, inset 0 0 30px rgba(74, 144, 255, 0.3);
+  }
+  canvas {
+    display: block;
+    background: #000010;
+    border-radius: 8px;
+  }
+  #info {
+    margin-top: 12px;
+    font-size: 14px;
+    color: #aaccff;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .key {
+    display: inline-block;
+    background: #333;
+    padding: 2px 10px;
+    border-radius: 6px;
+    border: 2px solid #666;
+    margin: 0 2px;
+    font-weight: bold;
+    color: #fff;
+  }
+  #overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0, 0, 30, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    z-index: 10;
+  }
+  #overlay h2 {
+    font-size: 48px;
+    color: #ffe44d;
+    text-shadow: 3px 3px 0 #ff4081;
+    margin-bottom: 20px;
+  }
+  #overlay button {
+    font-size: 24px;
+    padding: 12px 32px;
+    background: #ff4081;
+    color: #fff;
+    border: none;
+    border-radius: 50px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: bold;
+    box-shadow: 0 4px 0 #b71c4a;
+    transition: transform 0.1s;
+  }
+  #overlay button:hover {
+    transform: translateY(-2px);
+  }
+  #overlay button:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #b71c4a;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<h1>★ うちゅうスマッシュ ★</h1>
+<div id="gameContainer">
+  <canvas id="game" width="900" height="540"></canvas>
+  <div id="overlay">
+    <h2 id="title">うちゅうスマッシュ！</h2>
+    <p id="subtitle" style="margin-bottom: 24px; font-size: 18px;">ボタンをおして スタート！</p>
+    <button id="startBtn">スタート</button>
+  </div>
+</div>
+<div id="info">
+  <strong>うごく:</strong> <span class="key">←</span><span class="key">→</span>
+  <strong>ジャンプ:</strong> <span class="key">↑</span> または <span class="key">スペース</span>
+  <strong>こうげき:</strong> <span class="key">Z</span>
+  <strong>つよいこうげき:</strong> <span class="key">X</span><br>
+  ※ ステージから おちたら まけ！ ダメージが おおいほど とおくに ふきとぶよ！
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// ステージ
+const stage = { x: 150, y: 380, w: 600, h: 30 };
+
+// 星の背景
+const stars = [];
+for (let i = 0; i < 120; i++) {
+  stars.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    r: Math.random() * 1.8 + 0.3,
+    tw: Math.random() * Math.PI * 2
+  });
+}
+// 遠くの惑星
+const planets = [
+  { x: 120, y: 100, r: 40, c1: '#ff8c00', c2: '#ff4081' },
+  { x: 760, y: 80, r: 25, c1: '#7c4dff', c2: '#3949ab' },
+  { x: 700, y: 200, r: 15, c1: '#4dd0e1', c2: '#01579b' }
+];
+
+// キャラクター作成
+function makeFighter(opts) {
+  return {
+    name: opts.name,
+    color: opts.color,
+    eyeColor: opts.eyeColor || '#fff',
+    type: opts.type, // 'astronaut' or 'alien'
+    x: opts.x,
+    y: opts.y,
+    vx: 0,
+    vy: 0,
+    w: 50,
+    h: 70,
+    facing: opts.facing, // 1 or -1
+    onGround: false,
+    damage: 0, // %
+    attackCooldown: 0,
+    attackBox: null, // {x, y, w, h, dmg, kb, life}
+    hitstun: 0,
+    isCPU: opts.isCPU || false,
+    cpuTimer: 0,
+    cpuAction: 'idle',
+    lives: 3,
+    flashTimer: 0,
+    walkAnim: 0
+  };
+}
+
+let p1, p2, gameState, winner, particles, announceText, announceTimer;
+
+function resetGame() {
+  p1 = makeFighter({
+    name: 'うちゅうひこうし',
+    color: '#4a90ff',
+    eyeColor: '#fff',
+    type: 'astronaut',
+    x: 300, y: 300,
+    facing: 1,
+    isCPU: false
+  });
+  p2 = makeFighter({
+    name: 'エイリアン',
+    color: '#7ed957',
+    eyeColor: '#000',
+    type: 'alien',
+    x: 600, y: 300,
+    facing: -1,
+    isCPU: true
+  });
+  particles = [];
+  winner = null;
+  announceText = '';
+  announceTimer = 0;
+  gameState = 'play';
+}
+
+// 入力
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  // ジャンプとアタックは押した瞬間判定
+  if (gameState === 'play' && !p1.hitstun) {
+    if ((e.key === 'ArrowUp' || e.key === ' ') && p1.onGround) {
+      p1.vy = -13;
+      p1.onGround = false;
+    }
+    if (e.key.toLowerCase() === 'z' && p1.attackCooldown <= 0) {
+      doAttack(p1, false);
+    }
+    if (e.key.toLowerCase() === 'x' && p1.attackCooldown <= 0) {
+      doAttack(p1, true);
+    }
+  }
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+function doAttack(f, strong) {
+  const range = strong ? 60 : 45;
+  const dmg = strong ? 15 : 7;
+  const kb = strong ? 8 : 4;
+  f.attackBox = {
+    x: f.x + (f.facing === 1 ? f.w/2 : -f.w/2 - range),
+    y: f.y - f.h/2 - 5,
+    w: range,
+    h: f.h * 0.7,
+    dmg: dmg,
+    kb: kb,
+    strong: strong,
+    life: strong ? 14 : 8,
+    owner: f
+  };
+  f.attackCooldown = strong ? 35 : 18;
+}
+
+// CPU AI（小学3年生でも勝てるくらい簡単）
+function updateCPU(cpu, target) {
+  if (cpu.hitstun > 0) return;
+  cpu.cpuTimer--;
+
+  const dx = target.x - cpu.x;
+  const adx = Math.abs(dx);
+  const dy = target.y - cpu.y;
+
+  // 落下回避：ステージから外れそうなら戻る
+  const onStage = cpu.x > stage.x + 10 && cpu.x < stage.x + stage.w - 10;
+  if (!onStage && cpu.y < stage.y) {
+    // ステージ中央へ向かう
+    const center = stage.x + stage.w/2;
+    cpu.vx += (center - cpu.x) > 0 ? 0.4 : -0.4;
+    if (cpu.onGround) { cpu.vy = -13; cpu.onGround = false; }
+    cpu.facing = (center - cpu.x) > 0 ? 1 : -1;
+    return;
+  }
+
+  if (cpu.cpuTimer <= 0) {
+    // 行動を決め直す（ゆっくり）
+    cpu.cpuTimer = 30 + Math.random() * 50;
+    if (adx < 70) {
+      cpu.cpuAction = Math.random() < 0.5 ? 'attack' : 'back';
+    } else if (adx < 250) {
+      cpu.cpuAction = Math.random() < 0.7 ? 'approach' : 'wait';
+    } else {
+      cpu.cpuAction = 'approach';
+    }
+  }
+
+  cpu.facing = dx > 0 ? 1 : -1;
+
+  if (cpu.cpuAction === 'approach') {
+    cpu.vx += (dx > 0 ? 0.3 : -0.3);
+    // たまにジャンプ
+    if (cpu.onGround && Math.random() < 0.015 && dy < -20) {
+      cpu.vy = -13;
+      cpu.onGround = false;
+    }
+  } else if (cpu.cpuAction === 'back') {
+    cpu.vx += (dx > 0 ? -0.3 : 0.3);
+  } else if (cpu.cpuAction === 'attack') {
+    if (cpu.attackCooldown <= 0 && adx < 65) {
+      // 弱攻撃メイン（やさしい）、たまに強
+      doAttack(cpu, Math.random() < 0.2);
+    }
+  }
+  // 反応おそめ
+}
+
+function update() {
+  if (gameState !== 'play') return;
+
+  // 星のキラキラ
+  stars.forEach(s => s.tw += 0.05);
+
+  // P1 入力
+  if (p1.hitstun <= 0) {
+    if (keys['arrowleft']) { p1.vx -= 0.6; p1.facing = -1; }
+    if (keys['arrowright']) { p1.vx += 0.6; p1.facing = 1; }
+  }
+
+  // CPU
+  updateCPU(p2, p1);
+
+  [p1, p2].forEach(f => {
+    // 摩擦
+    f.vx *= 0.85;
+    if (Math.abs(f.vx) > 8) f.vx = Math.sign(f.vx) * 8;
+    // 重力
+    f.vy += 0.6;
+    if (f.vy > 14) f.vy = 14;
+
+    f.x += f.vx;
+    f.y += f.vy;
+
+    // ステージ着地判定
+    const feetY = f.y;
+    const onTopOfStage =
+      f.x > stage.x && f.x < stage.x + stage.w &&
+      feetY >= stage.y && feetY <= stage.y + 20 &&
+      f.vy >= 0;
+    if (onTopOfStage) {
+      f.y = stage.y;
+      f.vy = 0;
+      f.onGround = true;
+    } else {
+      f.onGround = false;
+    }
+
+    // 歩きアニメ
+    if (f.onGround && Math.abs(f.vx) > 0.5) f.walkAnim += 0.3;
+
+    if (f.attackCooldown > 0) f.attackCooldown--;
+    if (f.hitstun > 0) f.hitstun--;
+    if (f.flashTimer > 0) f.flashTimer--;
+
+    // 攻撃判定の寿命
+    if (f.attackBox) {
+      f.attackBox.life--;
+      // 攻撃ボックスをキャラについていかせる
+      f.attackBox.x = f.x + (f.facing === 1 ? f.w/2 : -f.w/2 - f.attackBox.w);
+      f.attackBox.y = f.y - f.h/2 - 5;
+      if (f.attackBox.life <= 0) f.attackBox = null;
+    }
+  });
+
+  // 攻撃ヒット判定
+  checkHit(p1, p2);
+  checkHit(p2, p1);
+
+  // 落下判定（画面外）
+  [p1, p2].forEach(f => {
+    if (f.y > H + 100 || f.x < -100 || f.x > W + 100 || f.y < -200) {
+      f.lives--;
+      // 爆発パーティクル
+      explode(Math.max(20, Math.min(W-20, f.x)), Math.max(20, Math.min(H-20, f.y)), f.color);
+      if (f.lives <= 0) {
+        winner = (f === p1) ? p2 : p1;
+        gameState = 'over';
+      } else {
+        // リスポーン
+        f.x = stage.x + stage.w/2 + (f === p1 ? -80 : 80);
+        f.y = 100;
+        f.vx = 0; f.vy = 0;
+        f.damage = 0;
+        f.hitstun = 30;
+        f.flashTimer = 60;
+        announce(f.name + ' ふっかつ！', 60);
+      }
+    }
+  });
+
+  // パーティクル
+  particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.2;
+    p.life--;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  if (announceTimer > 0) announceTimer--;
+}
+
+function checkHit(attacker, defender) {
+  if (!attacker.attackBox) return;
+  if (defender.hitstun > 0 && defender.flashTimer > 0) return; // 復活直後の無敵
+  const a = attacker.attackBox;
+  const dLeft = defender.x - defender.w/2;
+  const dRight = defender.x + defender.w/2;
+  const dTop = defender.y - defender.h;
+  const dBot = defender.y;
+  if (a.x < dRight && a.x + a.w > dLeft && a.y < dBot && a.y + a.h > dTop) {
+    // ヒット
+    defender.damage += a.dmg;
+    const kbForce = a.kb + defender.damage * 0.08;
+    defender.vx = attacker.facing * kbForce;
+    defender.vy = -kbForce * 0.7 - 2;
+    defender.hitstun = a.strong ? 25 : 12;
+    attacker.attackBox = null;
+    // ヒットエフェクト
+    for (let i = 0; i < 14; i++) {
+      particles.push({
+        x: defender.x,
+        y: defender.y - defender.h/2,
+        vx: (Math.random() - 0.5) * 6,
+        vy: (Math.random() - 0.5) * 6 - 2,
+        life: 25 + Math.random() * 10,
+        color: a.strong ? '#ff4081' : '#ffe44d',
+        r: 3 + Math.random() * 3
+      });
+    }
+    if (a.strong) {
+      // 画面シェイク用
+      shake = 10;
+    } else {
+      shake = 4;
+    }
+  }
+}
+
+function explode(x, y, color) {
+  for (let i = 0; i < 30; i++) {
+    particles.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 12,
+      vy: (Math.random() - 0.5) * 12,
+      life: 40 + Math.random() * 20,
+      color: i % 2 === 0 ? color : '#ffe44d',
+      r: 3 + Math.random() * 4
+    });
+  }
+  shake = 15;
+}
+
+function announce(text, time) {
+  announceText = text;
+  announceTimer = time;
+}
+
+let shake = 0;
+
+function draw() {
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    shake *= 0.85;
+    if (shake < 0.5) shake = 0;
+  }
+
+  // 背景：宇宙
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a0a3a');
+  grad.addColorStop(1, '#000010');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // 星
+  stars.forEach(s => {
+    ctx.globalAlpha = 0.5 + Math.sin(s.tw) * 0.4;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  // 惑星
+  planets.forEach(pl => {
+    const g = ctx.createRadialGradient(pl.x - pl.r/3, pl.y - pl.r/3, 1, pl.x, pl.y, pl.r);
+    g.addColorStop(0, pl.c1);
+    g.addColorStop(1, pl.c2);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(pl.x, pl.y, pl.r, 0, Math.PI * 2);
+    ctx.fill();
+    // 土星のリング風
+    if (pl === planets[0]) {
+      ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(pl.x, pl.y, pl.r * 1.6, pl.r * 0.4, -0.3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  });
+
+  // ステージ（宇宙基地っぽく）
+  const stageGrad = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  stageGrad.addColorStop(0, '#aab8d6');
+  stageGrad.addColorStop(0.5, '#5a6a99');
+  stageGrad.addColorStop(1, '#2a3550');
+  ctx.fillStyle = stageGrad;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  // ステージのフチ
+  ctx.fillStyle = '#ffe44d';
+  ctx.fillRect(stage.x, stage.y, stage.w, 4);
+  // ステージ下のメカ模様
+  ctx.fillStyle = '#1a2030';
+  for (let i = 0; i < 8; i++) {
+    ctx.fillRect(stage.x + 30 + i * 70, stage.y + stage.h - 8, 40, 4);
+  }
+  // ステージ下のグロー
+  ctx.fillStyle = 'rgba(74, 144, 255, 0.3)';
+  ctx.fillRect(stage.x, stage.y + stage.h, stage.w, 30);
+
+  // ファイター描画
+  drawFighter(p2);
+  drawFighter(p1);
+
+  // 攻撃ヒットボックス（エフェクト）
+  [p1, p2].forEach(f => {
+    if (f.attackBox) {
+      const a = f.attackBox;
+      ctx.save();
+      const alpha = Math.min(1, a.life / 8);
+      ctx.globalAlpha = alpha * 0.7;
+      const swingGrad = ctx.createRadialGradient(
+        a.x + a.w/2, a.y + a.h/2, 5,
+        a.x + a.w/2, a.y + a.h/2, a.w
+      );
+      swingGrad.addColorStop(0, a.strong ? '#ff4081' : '#ffe44d');
+      swingGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = swingGrad;
+      ctx.beginPath();
+      ctx.ellipse(a.x + a.w/2, a.y + a.h/2, a.w/1.5, a.h/2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  });
+
+  // パーティクル
+  particles.forEach(p => {
+    ctx.globalAlpha = Math.min(1, p.life / 20);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+
+  // UI（ダメージ表示・残機）
+  drawUI();
+
+  // アナウンス
+  if (announceTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, announceTimer / 30);
+    ctx.fillStyle = '#ffe44d';
+    ctx.strokeStyle = '#ff4081';
+    ctx.lineWidth = 6;
+    ctx.font = 'bold 48px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.strokeText(announceText, W/2, H/2);
+    ctx.fillText(announceText, W/2, H/2);
+    ctx.restore();
+  }
+}
+
+function drawFighter(f) {
+  ctx.save();
+  // 影
+  if (f.onGround) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(f.x, stage.y + 2, 22, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 点滅（無敵中）
+  if (f.flashTimer > 0 && Math.floor(f.flashTimer / 4) % 2 === 0) {
+    ctx.globalAlpha = 0.4;
+  }
+
+  ctx.translate(f.x, f.y);
+  ctx.scale(f.facing, 1);
+
+  // 攻撃モーション：振り上げ
+  let armAngle = 0;
+  if (f.attackBox) {
+    const t = 1 - (f.attackBox.life / (f.attackBox.strong ? 14 : 8));
+    armAngle = Math.sin(t * Math.PI) * 1.2;
+  }
+
+  // 歩きで上下に揺れる
+  const bob = f.onGround && Math.abs(f.vx) > 0.5 ? Math.sin(f.walkAnim) * 2 : 0;
+
+  if (f.type === 'astronaut') {
+    drawAstronaut(f, armAngle, bob);
+  } else {
+    drawAlien(f, armAngle, bob);
+  }
+
+  ctx.restore();
+}
+
+function drawAstronaut(f, armAngle, bob) {
+  // 体（白い宇宙服）
+  ctx.fillStyle = '#f0f0f0';
+  ctx.fillRect(-18, -50 + bob, 36, 38);
+  // 胸の青パネル
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-10, -42 + bob, 20, 14);
+  ctx.fillStyle = '#ffe44d';
+  ctx.fillRect(-6, -38 + bob, 4, 4);
+  ctx.fillStyle = '#ff4081';
+  ctx.fillRect(2, -38 + bob, 4, 4);
+
+  // 足
+  ctx.fillStyle = '#d0d0d0';
+  ctx.fillRect(-15, -12 + bob, 12, 14);
+  ctx.fillRect(3, -12 + bob, 12, 14);
+  // ブーツ
+  ctx.fillStyle = '#333';
+  ctx.fillRect(-17, -2 + bob, 16, 4);
+  ctx.fillRect(1, -2 + bob, 16, 4);
+
+  // 腕
+  ctx.save();
+  ctx.translate(15, -45 + bob);
+  ctx.rotate(-armAngle);
+  ctx.fillStyle = '#f0f0f0';
+  ctx.fillRect(0, 0, 10, 22);
+  // 手袋
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-1, 18, 12, 8);
+  ctx.restore();
+  // 反対の腕
+  ctx.fillStyle = '#f0f0f0';
+  ctx.fillRect(-25, -45 + bob, 10, 22);
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-26, -27 + bob, 12, 8);
+
+  // ヘルメット
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(0, -60 + bob, 22, 0, Math.PI * 2);
+  ctx.fill();
+  // バイザー（ガラス）
+  const visorGrad = ctx.createLinearGradient(0, -68 + bob, 0, -52 + bob);
+  visorGrad.addColorStop(0, '#4a90ff');
+  visorGrad.addColorStop(1, '#001a4d');
+  ctx.fillStyle = visorGrad;
+  ctx.beginPath();
+  ctx.ellipse(2, -60 + bob, 14, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // バイザーの反射
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath();
+  ctx.ellipse(6, -64 + bob, 4, 3, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // ヘルメットのアンテナ
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-15, -75 + bob);
+  ctx.lineTo(-18, -85 + bob);
+  ctx.stroke();
+  ctx.fillStyle = '#ff4081';
+  ctx.beginPath();
+  ctx.arc(-18, -86 + bob, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawAlien(f, armAngle, bob) {
+  // 体（緑のぷにぷに）
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(0, -30 + bob, 22, 28, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // お腹の模様（薄い緑）
+  ctx.fillStyle = '#b8f0a0';
+  ctx.beginPath();
+  ctx.ellipse(0, -25 + bob, 12, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 足（短い）
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-12, -8 + bob, 8, 10);
+  ctx.fillRect(4, -8 + bob, 8, 10);
+  ctx.fillStyle = '#5da043';
+  ctx.fillRect(-13, 0 + bob, 10, 3);
+  ctx.fillRect(3, 0 + bob, 10, 3);
+
+  // 腕（触手っぽい）
+  ctx.save();
+  ctx.translate(18, -38 + bob);
+  ctx.rotate(-armAngle);
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(8, 8, 6, 16, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // 手
+  ctx.fillStyle = '#b8f0a0';
+  ctx.beginPath();
+  ctx.arc(13, 22, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // 反対腕
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(-23, -28 + bob, 6, 14, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#b8f0a0';
+  ctx.beginPath();
+  ctx.arc(-26, -16 + bob, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 頭
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(0, -58 + bob, 20, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 目（大きいキラキラ）
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(-7, -58 + bob, 6, 0, Math.PI * 2);
+  ctx.arc(7, -58 + bob, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(-6, -57 + bob, 3, 0, Math.PI * 2);
+  ctx.arc(8, -57 + bob, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(-5, -58 + bob, 1.2, 0, Math.PI * 2);
+  ctx.arc(9, -58 + bob, 1.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 口（にっこり）
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, -50 + bob, 4, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+
+  // アンテナ
+  ctx.strokeStyle = f.color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-8, -73 + bob);
+  ctx.lineTo(-10, -85 + bob);
+  ctx.moveTo(8, -73 + bob);
+  ctx.lineTo(10, -85 + bob);
+  ctx.stroke();
+  // アンテナの先っぽ
+  ctx.fillStyle = '#ffe44d';
+  ctx.beginPath();
+  ctx.arc(-10, -86 + bob, 3.5, 0, Math.PI * 2);
+  ctx.arc(10, -86 + bob, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawUI() {
+  // P1 パネル
+  drawPlayerPanel(30, H - 90, p1, '1Pくん');
+  // P2 パネル
+  drawPlayerPanel(W - 230, H - 90, p2, 'CPU');
+}
+
+function drawPlayerPanel(x, y, f, label) {
+  // 背景
+  ctx.fillStyle = 'rgba(0, 0, 30, 0.7)';
+  ctx.fillRect(x, y, 200, 75);
+  ctx.strokeStyle = f.color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, 200, 75);
+
+  // 名前
+  ctx.fillStyle = f.color;
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label + ': ' + f.name, x + 10, y + 22);
+
+  // ダメージ％（多いほど赤に）
+  const dmgColor = f.damage < 50 ? '#ffffff' : f.damage < 100 ? '#ffe44d' : f.damage < 150 ? '#ff8c00' : '#ff4081';
+  ctx.fillStyle = dmgColor;
+  ctx.font = 'bold 32px sans-serif';
+  ctx.fillText(Math.floor(f.damage) + '%', x + 10, y + 55);
+
+  // 残機（ハート）
+  for (let i = 0; i < 3; i++) {
+    const hx = x + 110 + i * 28;
+    const hy = y + 50;
+    if (i < f.lives) {
+      drawHeart(hx, hy, f.color);
+    } else {
+      drawHeart(hx, hy, '#333');
+    }
+  }
+}
+
+function drawHeart(cx, cy, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 8);
+  ctx.bezierCurveTo(cx, cy + 4, cx - 10, cy - 4, cx - 10, cy);
+  ctx.bezierCurveTo(cx - 10, cy - 6, cx - 4, cy - 8, cx, cy - 2);
+  ctx.bezierCurveTo(cx + 4, cy - 8, cx + 10, cy - 6, cx + 10, cy);
+  ctx.bezierCurveTo(cx + 10, cy - 4, cx, cy + 4, cx, cy + 8);
+  ctx.fill();
+}
+
+// メインループ
+function loop() {
+  update();
+  draw();
+  if (gameState === 'over') {
+    showOverlay(winner === p1 ? 'キミの かち！' : 'CPUの かち...', 'もういちど あそぶ？');
+  }
+  requestAnimationFrame(loop);
+}
+
+// オーバーレイ
+const overlay = document.getElementById('overlay');
+const titleEl = document.getElementById('title');
+const subtitleEl = document.getElementById('subtitle');
+const startBtn = document.getElementById('startBtn');
+
+function showOverlay(title, sub) {
+  if (!overlay.classList.contains('hidden')) return; // 既に出ていれば何もしない
+  titleEl.textContent = title;
+  subtitleEl.textContent = sub;
+  startBtn.textContent = 'もういちど！';
+  overlay.classList.remove('hidden');
+}
+
+startBtn.addEventListener('click', () => {
+  resetGame();
+  overlay.classList.add('hidden');
+});
+
+// 初期化
+resetGame();
+gameState = 'title'; // タイトル中は更新しないので…
+// やっぱりタイトル画面でも背景アニメは欲しいので state は play のままで、オーバーレイで隠す形にする
+gameState = 'play';
+// タイトルから始まるので、操作不能にしたい → CPUとP1を中央に置いて待機
+// 簡単化のため、ボタン押すまでは update を簡易停止
+let started = false;
+const origUpdate = update;
+function update() {
+  if (!started) {
+    // 星だけ動かす
+    stars.forEach(s => s.tw += 0.05);
+    return;
+  }
+  origUpdate();
+}
+startBtn.addEventListener('click', () => { started = true; });
+
+loop();
+</script>
+</body>
+</html>
