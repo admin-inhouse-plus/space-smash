@@ -98,7 +98,7 @@
   <canvas id="game" width="900" height="540"></canvas>
   <div id="overlay">
     <h2 id="title">うちゅうスマッシュ！</h2>
-    <p id="subtitle" style="margin-bottom: 24px; font-size: 18px;">ボタンをおして スタート！</p>
+    <p id="subtitle" style="margin-bottom: 24px; font-size: 18px;">てきを たおすほど つよい てきが でてくるぞ！</p>
     <button id="startBtn">スタート</button>
   </div>
 </div>
@@ -107,7 +107,8 @@
   <strong>ジャンプ:</strong> <span class="key">↑</span> または <span class="key">スペース</span>
   <strong>こうげき:</strong> <span class="key">Z</span>
   <strong>つよいこうげき:</strong> <span class="key">X</span><br>
-  ※ ステージから おちたら まけ！ ダメージが おおいほど とおくに ふきとぶよ！
+  ※ ステージから おちたら まけ！ ダメージが おおいほど とおくに ふきとぶよ！<br>
+  ★ てきを たおすと どんどん つよい てきが でてくる！ どこまで いける？
 </div>
 
 <script>
@@ -136,19 +137,49 @@ const planets = [
   { x: 700, y: 200, r: 15, c1: '#4dd0e1', c2: '#01579b' }
 ];
 
+// ウェーブ表（倒すごとに強い敵がでる！）
+const waveTable = [
+  { type: 'alien',     name: 'エイリアン',       color: '#7ed957', size: 1.0 },
+  { type: 'alien_red', name: 'あかエイリアン',   color: '#ff6b6b', size: 1.0 },
+  { type: 'robot',     name: 'うちゅうロボ',     color: '#aab8d6', size: 1.1 },
+  { type: 'ghost',     name: 'ゆうれい',         color: '#e0c8ff', size: 1.0 },
+  { type: 'boss',      name: 'まおう',           color: '#b03060', size: 1.5 },
+];
+
+function getWaveConfig(wave) {
+  const idx = Math.min(wave - 1, waveTable.length - 1);
+  const base = waveTable[idx];
+  const extra = Math.max(0, wave - waveTable.length);
+  const lvSuffix = extra > 0 ? ' Lv.' + (extra + 1) : '';
+  return {
+    type: base.type,
+    name: base.name + lvSuffix,
+    color: base.color,
+    size: base.size,
+    speedMul: 1 + (wave - 1) * 0.07,
+    dmgMul: 1 + (wave - 1) * 0.08,
+    kbMul: 1 + (wave - 1) * 0.05,
+    aiCool: Math.max(0.35, 1 - (wave - 1) * 0.08), // 小さいほど判断はやい
+    aggression: Math.min(0.9, 0.5 + (wave - 1) * 0.06), // 攻撃よりにかたよる
+    lives: base.type === 'boss' ? 2 + Math.floor(extra / 2) : 1,
+  };
+}
+
 // キャラクター作成
 function makeFighter(opts) {
+  const size = opts.size || 1.0;
   return {
     name: opts.name,
     color: opts.color,
     eyeColor: opts.eyeColor || '#fff',
-    type: opts.type, // 'astronaut' or 'alien'
+    type: opts.type, // 'astronaut' | 'alien' | 'alien_red' | 'robot' | 'ghost' | 'boss'
     x: opts.x,
     y: opts.y,
     vx: 0,
     vy: 0,
-    w: 50,
-    h: 70,
+    size: size,
+    w: 50 * size,
+    h: 70 * size,
     facing: opts.facing, // 1 or -1
     onGround: false,
     damage: 0, // %
@@ -158,15 +189,45 @@ function makeFighter(opts) {
     isCPU: opts.isCPU || false,
     cpuTimer: 0,
     cpuAction: 'idle',
-    lives: 3,
+    lives: opts.lives != null ? opts.lives : 3,
     flashTimer: 0,
-    walkAnim: 0
+    walkAnim: 0,
+    // ウェーブ用ステータス倍率（既定は1.0）
+    speedMul: opts.speedMul || 1.0,
+    dmgMul: opts.dmgMul || 1.0,
+    kbMul: opts.kbMul || 1.0,
+    aiCool: opts.aiCool || 1.0,
+    aggression: opts.aggression != null ? opts.aggression : 0.5,
   };
 }
 
 let p1, p2, gameState, winner, particles, announceText, announceTimer;
+let wave, score, waveTransitionTimer;
+
+function spawnEnemy(waveNum) {
+  const c = getWaveConfig(waveNum);
+  return makeFighter({
+    name: c.name,
+    color: c.color,
+    type: c.type,
+    size: c.size,
+    x: stage.x + stage.w * 0.7,
+    y: 100,
+    facing: -1,
+    isCPU: true,
+    lives: c.lives,
+    speedMul: c.speedMul,
+    dmgMul: c.dmgMul,
+    kbMul: c.kbMul,
+    aiCool: c.aiCool,
+    aggression: c.aggression,
+  });
+}
 
 function resetGame() {
+  wave = 1;
+  score = 0;
+  waveTransitionTimer = 0;
   p1 = makeFighter({
     name: 'うちゅうひこうし',
     color: '#4a90ff',
@@ -174,22 +235,32 @@ function resetGame() {
     type: 'astronaut',
     x: 300, y: 300,
     facing: 1,
-    isCPU: false
+    isCPU: false,
+    lives: 3
   });
-  p2 = makeFighter({
-    name: 'エイリアン',
-    color: '#7ed957',
-    eyeColor: '#000',
-    type: 'alien',
-    x: 600, y: 300,
-    facing: -1,
-    isCPU: true
-  });
+  p2 = spawnEnemy(wave);
   particles = [];
   winner = null;
   announceText = '';
   announceTimer = 0;
+  announce('WAVE 1  ' + p2.name + '!', 90);
   gameState = 'play';
+}
+
+function nextWave() {
+  wave++;
+  score++;
+  // 3ウェーブごとに残機ボーナス（最大5）
+  if (wave % 3 === 1 && p1.lives < 5) p1.lives++;
+  // プレイヤーは回復＋無敵
+  p1.damage = 0;
+  p1.hitstun = 20;
+  p1.flashTimer = 90;
+  p1.x = stage.x + stage.w * 0.3;
+  p1.y = 200;
+  p1.vx = 0; p1.vy = 0;
+  p2 = spawnEnemy(wave);
+  announce('WAVE ' + wave + '  ' + p2.name + '!', 90);
 }
 
 // 入力
@@ -214,9 +285,9 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
 function doAttack(f, strong) {
-  const range = strong ? 60 : 45;
-  const dmg = strong ? 15 : 7;
-  const kb = strong ? 8 : 4;
+  const range = (strong ? 60 : 45) * f.size;
+  const dmg = (strong ? 15 : 7) * f.dmgMul;
+  const kb = (strong ? 8 : 4) * f.kbMul;
   f.attackBox = {
     x: f.x + (f.facing === 1 ? f.w/2 : -f.w/2 - range),
     y: f.y - f.h/2 - 5,
@@ -231,7 +302,7 @@ function doAttack(f, strong) {
   f.attackCooldown = strong ? 35 : 18;
 }
 
-// CPU AI（小学3年生でも勝てるくらい簡単）
+// CPU AI（ウェーブが進むほど反応が速くなる）
 function updateCPU(cpu, target) {
   if (cpu.hitstun > 0) return;
   cpu.cpuTimer--;
@@ -239,25 +310,25 @@ function updateCPU(cpu, target) {
   const dx = target.x - cpu.x;
   const adx = Math.abs(dx);
   const dy = target.y - cpu.y;
+  const accel = 0.3 * cpu.speedMul;
+  const reach = 65 * cpu.size;
 
   // 落下回避：ステージから外れそうなら戻る
   const onStage = cpu.x > stage.x + 10 && cpu.x < stage.x + stage.w - 10;
   if (!onStage && cpu.y < stage.y) {
-    // ステージ中央へ向かう
     const center = stage.x + stage.w/2;
-    cpu.vx += (center - cpu.x) > 0 ? 0.4 : -0.4;
+    cpu.vx += (center - cpu.x) > 0 ? accel + 0.1 : -(accel + 0.1);
     if (cpu.onGround) { cpu.vy = -13; cpu.onGround = false; }
     cpu.facing = (center - cpu.x) > 0 ? 1 : -1;
     return;
   }
 
   if (cpu.cpuTimer <= 0) {
-    // 行動を決め直す（ゆっくり）
-    cpu.cpuTimer = 30 + Math.random() * 50;
-    if (adx < 70) {
-      cpu.cpuAction = Math.random() < 0.5 ? 'attack' : 'back';
+    cpu.cpuTimer = (30 + Math.random() * 50) * cpu.aiCool;
+    if (adx < reach + 10) {
+      cpu.cpuAction = Math.random() < cpu.aggression ? 'attack' : 'back';
     } else if (adx < 250) {
-      cpu.cpuAction = Math.random() < 0.7 ? 'approach' : 'wait';
+      cpu.cpuAction = Math.random() < (0.4 + cpu.aggression * 0.4) ? 'approach' : 'wait';
     } else {
       cpu.cpuAction = 'approach';
     }
@@ -266,21 +337,22 @@ function updateCPU(cpu, target) {
   cpu.facing = dx > 0 ? 1 : -1;
 
   if (cpu.cpuAction === 'approach') {
-    cpu.vx += (dx > 0 ? 0.3 : -0.3);
-    // たまにジャンプ
-    if (cpu.onGround && Math.random() < 0.015 && dy < -20) {
+    cpu.vx += (dx > 0 ? accel : -accel);
+    // たまにジャンプ（強いほどよくジャンプ）
+    const jumpChance = 0.015 + (cpu.speedMul - 1) * 0.04;
+    if (cpu.onGround && Math.random() < jumpChance && dy < -20) {
       cpu.vy = -13;
       cpu.onGround = false;
     }
   } else if (cpu.cpuAction === 'back') {
-    cpu.vx += (dx > 0 ? -0.3 : 0.3);
+    cpu.vx += (dx > 0 ? -accel : accel);
   } else if (cpu.cpuAction === 'attack') {
-    if (cpu.attackCooldown <= 0 && adx < 65) {
-      // 弱攻撃メイン（やさしい）、たまに強
-      doAttack(cpu, Math.random() < 0.2);
+    if (cpu.attackCooldown <= 0 && adx < reach) {
+      // ウェーブが上がるほど強攻撃の頻度UP
+      const strongChance = Math.min(0.6, 0.2 + (cpu.dmgMul - 1) * 0.8);
+      doAttack(cpu, Math.random() < strongChance);
     }
   }
-  // 反応おそめ
 }
 
 function update() {
@@ -291,8 +363,8 @@ function update() {
 
   // P1 入力
   if (p1.hitstun <= 0) {
-    if (keys['arrowleft']) { p1.vx -= 0.6; p1.facing = -1; }
-    if (keys['arrowright']) { p1.vx += 0.6; p1.facing = 1; }
+    if (keys['arrowleft']) { p1.vx -= 0.6 * p1.speedMul; p1.facing = -1; }
+    if (keys['arrowright']) { p1.vx += 0.6 * p1.speedMul; p1.facing = 1; }
   }
 
   // CPU
@@ -301,9 +373,11 @@ function update() {
   [p1, p2].forEach(f => {
     // 摩擦
     f.vx *= 0.85;
-    if (Math.abs(f.vx) > 8) f.vx = Math.sign(f.vx) * 8;
-    // 重力
-    f.vy += 0.6;
+    const maxVx = 8 * f.speedMul;
+    if (Math.abs(f.vx) > maxVx) f.vx = Math.sign(f.vx) * maxVx;
+    // 重力（ゆうれいは少しふんわり）
+    const gravity = f.type === 'ghost' ? 0.45 : 0.6;
+    f.vy += gravity;
     if (f.vy > 14) f.vy = 14;
 
     f.x += f.vx;
@@ -350,18 +424,35 @@ function update() {
       f.lives--;
       // 爆発パーティクル
       explode(Math.max(20, Math.min(W-20, f.x)), Math.max(20, Math.min(H-20, f.y)), f.color);
-      if (f.lives <= 0) {
-        winner = (f === p1) ? p2 : p1;
-        gameState = 'over';
+      if (f === p2) {
+        // 敵を倒した
+        if (f.lives <= 0) {
+          // ウェーブクリア → つぎの敵
+          nextWave();
+        } else {
+          // ボスなど複数機：その場で復活
+          f.x = stage.x + stage.w * 0.7;
+          f.y = 100;
+          f.vx = 0; f.vy = 0;
+          f.damage = 0;
+          f.hitstun = 30;
+          f.flashTimer = 60;
+          announce(f.name + ' まだまだ！', 50);
+        }
       } else {
-        // リスポーン
-        f.x = stage.x + stage.w/2 + (f === p1 ? -80 : 80);
-        f.y = 100;
-        f.vx = 0; f.vy = 0;
-        f.damage = 0;
-        f.hitstun = 30;
-        f.flashTimer = 60;
-        announce(f.name + ' ふっかつ！', 60);
+        // プレイヤー落下
+        if (f.lives <= 0) {
+          winner = p2;
+          gameState = 'over';
+        } else {
+          f.x = stage.x + stage.w/2 - 80;
+          f.y = 100;
+          f.vx = 0; f.vy = 0;
+          f.damage = 0;
+          f.hitstun = 30;
+          f.flashTimer = 60;
+          announce(f.name + ' ふっかつ！', 60);
+        }
       }
     }
   });
@@ -380,7 +471,7 @@ function update() {
 
 function checkHit(attacker, defender) {
   if (!attacker.attackBox) return;
-  if (defender.hitstun > 0 && defender.flashTimer > 0) return; // 復活直後の無敵
+  if (defender.flashTimer > 0) return; // 復活直後の無敵
   const a = attacker.attackBox;
   const dLeft = defender.x - defender.w/2;
   const dRight = defender.x + defender.w/2;
@@ -561,7 +652,7 @@ function drawFighter(f) {
   if (f.onGround) {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
     ctx.beginPath();
-    ctx.ellipse(f.x, stage.y + 2, 22, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(f.x, stage.y + 2, 22 * f.size, 5 * f.size, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -571,7 +662,7 @@ function drawFighter(f) {
   }
 
   ctx.translate(f.x, f.y);
-  ctx.scale(f.facing, 1);
+  ctx.scale(f.facing * f.size, f.size);
 
   // 攻撃モーション：振り上げ
   let armAngle = 0;
@@ -583,10 +674,14 @@ function drawFighter(f) {
   // 歩きで上下に揺れる
   const bob = f.onGround && Math.abs(f.vx) > 0.5 ? Math.sin(f.walkAnim) * 2 : 0;
 
-  if (f.type === 'astronaut') {
-    drawAstronaut(f, armAngle, bob);
-  } else {
-    drawAlien(f, armAngle, bob);
+  switch (f.type) {
+    case 'astronaut': drawAstronaut(f, armAngle, bob); break;
+    case 'alien':
+    case 'alien_red': drawAlien(f, armAngle, bob); break;
+    case 'robot':     drawRobot(f, armAngle, bob); break;
+    case 'ghost':     drawGhost(f, armAngle, bob); break;
+    case 'boss':      drawBoss(f, armAngle, bob); break;
+    default:          drawAlien(f, armAngle, bob);
   }
 
   ctx.restore();
@@ -751,11 +846,215 @@ function drawAlien(f, armAngle, bob) {
   ctx.fill();
 }
 
+function drawRobot(f, armAngle, bob) {
+  // 胴体
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-20, -50 + bob, 40, 38);
+  // 胸の赤いランプ
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-10, -42 + bob, 20, 14);
+  ctx.fillStyle = '#ff4081';
+  ctx.beginPath();
+  ctx.arc(0, -35 + bob, 4, 0, Math.PI * 2);
+  ctx.fill();
+  // 足（メカ脚）
+  ctx.fillStyle = '#5a6680';
+  ctx.fillRect(-16, -12 + bob, 12, 14);
+  ctx.fillRect(4, -12 + bob, 12, 14);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-18, -2 + bob, 16, 4);
+  ctx.fillRect(2, -2 + bob, 16, 4);
+
+  // 腕
+  ctx.save();
+  ctx.translate(18, -45 + bob);
+  ctx.rotate(-armAngle);
+  ctx.fillStyle = f.color;
+  ctx.fillRect(0, 0, 10, 22);
+  ctx.fillStyle = '#5a6680';
+  ctx.fillRect(-2, 18, 14, 8);
+  ctx.restore();
+  // 反対の腕
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-28, -45 + bob, 10, 22);
+  ctx.fillStyle = '#5a6680';
+  ctx.fillRect(-30, -27 + bob, 14, 8);
+
+  // 頭（四角）
+  ctx.fillStyle = f.color;
+  ctx.fillRect(-18, -76 + bob, 36, 26);
+  // 目（赤いLED）
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-14, -68 + bob, 28, 10);
+  ctx.fillStyle = '#ff4081';
+  ctx.fillRect(-11, -65 + bob, 6, 4);
+  ctx.fillRect(5, -65 + bob, 6, 4);
+  // アンテナ
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -76 + bob);
+  ctx.lineTo(0, -88 + bob);
+  ctx.stroke();
+  ctx.fillStyle = '#ffe44d';
+  ctx.beginPath();
+  ctx.arc(0, -90 + bob, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawGhost(f, armAngle, bob) {
+  // 全体ぼんやり
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  // 浮遊：bob 強め
+  const float = Math.sin(f.walkAnim * 0.5 + performance.now() * 0.005) * 3;
+
+  // 体（ゆらゆらした下端）
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.moveTo(-22, -10 + float);
+  ctx.quadraticCurveTo(-26, -50 + float, 0, -60 + float);
+  ctx.quadraticCurveTo(26, -50 + float, 22, -10 + float);
+  // ギザギザの裾
+  ctx.lineTo(16, 2 + float);
+  ctx.lineTo(8, -6 + float);
+  ctx.lineTo(0, 2 + float);
+  ctx.lineTo(-8, -6 + float);
+  ctx.lineTo(-16, 2 + float);
+  ctx.closePath();
+  ctx.fill();
+
+  // 目（黒い穴）
+  ctx.fillStyle = '#1a0030';
+  ctx.beginPath();
+  ctx.ellipse(-7, -38 + float, 4, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(7, -38 + float, 4, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // 口
+  ctx.beginPath();
+  ctx.ellipse(0, -22 + float, 5, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 腕（ゆらゆら触手）
+  ctx.fillStyle = f.color;
+  ctx.save();
+  ctx.translate(20, -40 + float);
+  ctx.rotate(-armAngle);
+  ctx.beginPath();
+  ctx.ellipse(8, 12, 6, 16, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.ellipse(-22, -28 + float, 6, 12, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawBoss(f, armAngle, bob) {
+  // ボディ（ローブ風）
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.moveTo(-26, -10 + bob);
+  ctx.lineTo(-22, -55 + bob);
+  ctx.lineTo(22, -55 + bob);
+  ctx.lineTo(26, -10 + bob);
+  ctx.lineTo(20, -2 + bob);
+  ctx.lineTo(-20, -2 + bob);
+  ctx.closePath();
+  ctx.fill();
+  // ローブの黒い縁
+  ctx.fillStyle = '#3a0020';
+  ctx.fillRect(-26, -12 + bob, 52, 4);
+
+  // 胸の宝石
+  ctx.fillStyle = '#ffe44d';
+  ctx.beginPath();
+  ctx.moveTo(0, -42 + bob);
+  ctx.lineTo(-6, -35 + bob);
+  ctx.lineTo(0, -28 + bob);
+  ctx.lineTo(6, -35 + bob);
+  ctx.closePath();
+  ctx.fill();
+
+  // 腕
+  ctx.save();
+  ctx.translate(22, -50 + bob);
+  ctx.rotate(-armAngle);
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(8, 14, 8, 18, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // つめ
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(12, 28); ctx.lineTo(18, 36); ctx.lineTo(8, 32); ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  // 反対腕
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(-26, -36 + bob, 7, 16, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 頭
+  ctx.fillStyle = f.color;
+  ctx.beginPath();
+  ctx.ellipse(0, -68 + bob, 20, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // つの
+  ctx.fillStyle = '#3a0020';
+  ctx.beginPath();
+  ctx.moveTo(-14, -78 + bob); ctx.lineTo(-22, -98 + bob); ctx.lineTo(-8, -82 + bob); ctx.closePath();
+  ctx.moveTo(14, -78 + bob); ctx.lineTo(22, -98 + bob); ctx.lineTo(8, -82 + bob); ctx.closePath();
+  ctx.fill();
+
+  // 光る目
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(-7, -68 + bob, 5, 0, Math.PI * 2);
+  ctx.arc(7, -68 + bob, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ff4081';
+  ctx.beginPath();
+  ctx.arc(-7, -68 + bob, 3, 0, Math.PI * 2);
+  ctx.arc(7, -68 + bob, 3, 0, Math.PI * 2);
+  ctx.fill();
+  // 邪悪な口
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-6, -56 + bob);
+  ctx.lineTo(-2, -58 + bob);
+  ctx.lineTo(2, -56 + bob);
+  ctx.lineTo(6, -58 + bob);
+  ctx.stroke();
+}
+
 function drawUI() {
   // P1 パネル
   drawPlayerPanel(30, H - 90, p1, '1Pくん');
   // P2 パネル
-  drawPlayerPanel(W - 230, H - 90, p2, 'CPU');
+  drawPlayerPanel(W - 230, H - 90, p2, 'てき');
+
+  // ウェーブ表示（中央うえ）
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 30, 0.7)';
+  ctx.strokeStyle = '#ffe44d';
+  ctx.lineWidth = 3;
+  ctx.fillRect(W/2 - 90, 12, 180, 38);
+  ctx.strokeRect(W/2 - 90, 12, 180, 38);
+  ctx.fillStyle = '#ffe44d';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('WAVE ' + wave, W/2, 31);
+  // たおした数
+  ctx.fillStyle = '#aaccff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('たおした: ' + score, W/2, 46);
+  ctx.restore();
 }
 
 function drawPlayerPanel(x, y, f, label) {
@@ -770,6 +1069,7 @@ function drawPlayerPanel(x, y, f, label) {
   ctx.fillStyle = f.color;
   ctx.font = 'bold 16px sans-serif';
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
   ctx.fillText(label + ': ' + f.name, x + 10, y + 22);
 
   // ダメージ％（多いほど赤に）
@@ -778,26 +1078,24 @@ function drawPlayerPanel(x, y, f, label) {
   ctx.font = 'bold 32px sans-serif';
   ctx.fillText(Math.floor(f.damage) + '%', x + 10, y + 55);
 
-  // 残機（ハート）
-  for (let i = 0; i < 3; i++) {
-    const hx = x + 110 + i * 28;
+  // 残機（ハート）— 最大5まで表示
+  const maxHearts = Math.max(3, f.lives);
+  for (let i = 0; i < maxHearts; i++) {
+    const hx = x + 110 + i * 18;
     const hy = y + 50;
-    if (i < f.lives) {
-      drawHeart(hx, hy, f.color);
-    } else {
-      drawHeart(hx, hy, '#333');
-    }
+    drawHeart(hx, hy, i < f.lives ? f.color : '#333');
   }
 }
 
 function drawHeart(cx, cy, color) {
+  const s = 0.7; // 少し小さめ
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(cx, cy + 8);
-  ctx.bezierCurveTo(cx, cy + 4, cx - 10, cy - 4, cx - 10, cy);
-  ctx.bezierCurveTo(cx - 10, cy - 6, cx - 4, cy - 8, cx, cy - 2);
-  ctx.bezierCurveTo(cx + 4, cy - 8, cx + 10, cy - 6, cx + 10, cy);
-  ctx.bezierCurveTo(cx + 10, cy - 4, cx, cy + 4, cx, cy + 8);
+  ctx.moveTo(cx, cy + 8 * s);
+  ctx.bezierCurveTo(cx, cy + 4 * s, cx - 10 * s, cy - 4 * s, cx - 10 * s, cy);
+  ctx.bezierCurveTo(cx - 10 * s, cy - 6 * s, cx - 4 * s, cy - 8 * s, cx, cy - 2 * s);
+  ctx.bezierCurveTo(cx + 4 * s, cy - 8 * s, cx + 10 * s, cy - 6 * s, cx + 10 * s, cy);
+  ctx.bezierCurveTo(cx + 10 * s, cy - 4 * s, cx, cy + 4 * s, cx, cy + 8 * s);
   ctx.fill();
 }
 
@@ -806,7 +1104,7 @@ function loop() {
   update();
   draw();
   if (gameState === 'over') {
-    showOverlay(winner === p1 ? 'キミの かち！' : 'CPUの かち...', 'もういちど あそぶ？');
+    showOverlay('ゲームオーバー...', 'WAVE ' + wave + ' で やられた！ たおした数: ' + score);
   }
   requestAnimationFrame(loop);
 }
