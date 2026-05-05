@@ -137,6 +137,22 @@ const planets = [
   { x: 700, y: 200, r: 15, c1: '#4dd0e1', c2: '#01579b' }
 ];
 
+// ステージリスト（ウェーブごとに切り替わる）
+const stages = [
+  { type: 'space',  name: 'うちゅう' },
+  { type: 'magma',  name: 'マグマ' },
+  { type: 'ship',   name: 'うみのうえ' },
+  { type: 'cave',   name: 'どうくつ' },
+  { type: 'castle', name: 'おしろ' },
+];
+let currentStage = stages[0];
+let bgParticles = [];
+
+function setStageForWave(w) {
+  currentStage = stages[(w - 1) % stages.length];
+  bgParticles = [];
+}
+
 // ウェーブ表（倒すごとに強い敵がでる！）
 const waveTable = [
   { type: 'alien',     name: 'エイリアン',       color: '#7ed957', size: 1.0 },
@@ -228,6 +244,7 @@ function resetGame() {
   wave = 1;
   score = 0;
   waveTransitionTimer = 0;
+  setStageForWave(wave);
   p1 = makeFighter({
     name: 'うちゅうひこうし',
     color: '#4a90ff',
@@ -243,13 +260,14 @@ function resetGame() {
   winner = null;
   announceText = '';
   announceTimer = 0;
-  announce('WAVE 1  ' + p2.name + '!', 90);
+  announce('WAVE 1  ' + currentStage.name + '  ' + p2.name + '!', 100);
   gameState = 'play';
 }
 
 function nextWave() {
   wave++;
   score++;
+  setStageForWave(wave);
   // 3ウェーブごとに残機ボーナス（最大5）
   if (wave % 3 === 1 && p1.lives < 5) p1.lives++;
   // プレイヤーは回復＋無敵
@@ -260,7 +278,7 @@ function nextWave() {
   p1.y = 200;
   p1.vx = 0; p1.vy = 0;
   p2 = spawnEnemy(wave);
-  announce('WAVE ' + wave + '  ' + p2.name + '!', 90);
+  announce('WAVE ' + wave + '  ' + currentStage.name + '  ' + p2.name + '!', 100);
 }
 
 // 入力
@@ -466,6 +484,10 @@ function update() {
   });
   particles = particles.filter(p => p.life > 0);
 
+  // 背景パーティクル（ステージごと）
+  spawnBgParticles();
+  updateBgParticles();
+
   if (announceTimer > 0) announceTimer--;
 }
 
@@ -526,6 +548,449 @@ function announce(text, time) {
   announceTimer = time;
 }
 
+// ─── 背景パーティクル（ステージ別アンビエント） ───
+function spawnBgParticles() {
+  const t = currentStage.type;
+  if (t === 'magma') {
+    if (Math.random() < 0.35) {
+      bgParticles.push({
+        x: Math.random() * W, y: H + 5,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: -1 - Math.random() * 1.5,
+        life: 80 + Math.random() * 50,
+        color: ['#ff6b00', '#ffe44d', '#ff4081'][Math.floor(Math.random()*3)],
+        r: 1.5 + Math.random() * 2
+      });
+    }
+  } else if (t === 'ship') {
+    if (Math.random() < 0.06) {
+      bgParticles.push({
+        x: Math.random() * W,
+        y: H - 90 + Math.random() * 30,
+        vx: (Math.random() - 0.5) * 1.2,
+        vy: -2 - Math.random() * 1.5,
+        life: 25 + Math.random() * 15,
+        color: '#fff', r: 2 + Math.random() * 1.5
+      });
+    }
+  } else if (t === 'cave') {
+    if (Math.random() < 0.07) {
+      bgParticles.push({
+        x: 40 + Math.random() * (W - 80),
+        y: 30 + Math.random() * 80,
+        vx: 0, vy: 0.6 + Math.random() * 0.4,
+        life: 200, color: '#7ec8ff', r: 1.5
+      });
+    }
+  } else if (t === 'castle') {
+    if (Math.random() < 0.04) {
+      bgParticles.push({
+        x: Math.random() * W,
+        y: Math.random() * H * 0.5,
+        vx: 0, vy: 0,
+        life: 50 + Math.random() * 40,
+        color: '#fff', r: 1 + Math.random() * 1.2
+      });
+    }
+  }
+}
+
+function updateBgParticles() {
+  bgParticles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life--; });
+  bgParticles = bgParticles.filter(p => p.life > 0 && p.y > -20 && p.y < H + 20);
+}
+
+function drawBgParticles() {
+  bgParticles.forEach(p => {
+    ctx.globalAlpha = Math.min(1, p.life / 30);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+// ─── 背景描画（ステージ別） ───
+function drawBackground() {
+  switch (currentStage.type) {
+    case 'space':  drawBgSpace();  break;
+    case 'magma':  drawBgMagma();  break;
+    case 'ship':   drawBgShip();   break;
+    case 'cave':   drawBgCave();   break;
+    case 'castle': drawBgCastle(); break;
+  }
+}
+
+function drawBgSpace() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a0a3a');
+  grad.addColorStop(1, '#000010');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  // 星
+  stars.forEach(s => {
+    ctx.globalAlpha = 0.5 + Math.sin(s.tw) * 0.4;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  // 惑星
+  planets.forEach(pl => {
+    const g = ctx.createRadialGradient(pl.x - pl.r/3, pl.y - pl.r/3, 1, pl.x, pl.y, pl.r);
+    g.addColorStop(0, pl.c1);
+    g.addColorStop(1, pl.c2);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(pl.x, pl.y, pl.r, 0, Math.PI * 2);
+    ctx.fill();
+    if (pl === planets[0]) {
+      ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(pl.x, pl.y, pl.r * 1.6, pl.r * 0.4, -0.3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  });
+}
+
+function drawBgMagma() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a0000');
+  grad.addColorStop(0.6, '#3a0a08');
+  grad.addColorStop(1, '#7a1010');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // とおくの火山（シルエット）
+  ctx.fillStyle = '#1a0a08';
+  const peaks = [50,360, 130,300, 220,340, 320,290, 420,330, 520,300, 640,270, 740,320, 850,290];
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, 360);
+  for (let i = 0; i < peaks.length; i += 2) ctx.lineTo(peaks[i], peaks[i+1]);
+  ctx.lineTo(W, 350);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  // 火山口の光
+  ctx.fillStyle = '#ff6b00';
+  ctx.beginPath();
+  ctx.arc(220, 340, 4, 0, Math.PI * 2);
+  ctx.arc(420, 330, 5, 0, Math.PI * 2);
+  ctx.arc(640, 270, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 下のマグマ
+  const lava = ctx.createLinearGradient(0, H - 80, 0, H);
+  lava.addColorStop(0, '#ff4500');
+  lava.addColorStop(0.6, '#ff8800');
+  lava.addColorStop(1, '#a00000');
+  ctx.fillStyle = lava;
+  ctx.fillRect(0, H - 80, W, 80);
+  // マグマの上面の光
+  ctx.fillStyle = 'rgba(255, 220, 100, 0.4)';
+  ctx.fillRect(0, H - 84, W, 6);
+}
+
+function drawBgShip() {
+  // 空（昼）
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#7ec8e3');
+  grad.addColorStop(0.5, '#bae3f0');
+  grad.addColorStop(0.8, '#f8e8a0');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // たいよう
+  ctx.fillStyle = 'rgba(255, 228, 77, 0.4)';
+  ctx.beginPath();
+  ctx.arc(740, 130, 56, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff8a0';
+  ctx.beginPath();
+  ctx.arc(740, 130, 36, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 雲
+  drawCloud(140, 90, 1.0);
+  drawCloud(380, 60, 0.8);
+  drawCloud(560, 130, 1.1);
+
+  // うみ
+  const sea = ctx.createLinearGradient(0, H - 110, 0, H);
+  sea.addColorStop(0, '#3a8ec0');
+  sea.addColorStop(1, '#0a2a60');
+  ctx.fillStyle = sea;
+  ctx.fillRect(0, H - 110, W, 110);
+
+  // なみ
+  const t = performance.now() * 0.002;
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 2;
+  for (let layer = 0; layer < 3; layer++) {
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 8) {
+      const y = H - 100 + layer * 28 + Math.sin(x * 0.03 + t + layer * 0.7) * 4;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawCloud(x, y, s) {
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath();
+  ctx.arc(x, y, 22 * s, 0, Math.PI * 2);
+  ctx.arc(x + 18 * s, y - 4, 26 * s, 0, Math.PI * 2);
+  ctx.arc(x + 38 * s, y, 22 * s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawBgCave() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a1410');
+  grad.addColorStop(1, '#0a0808');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // しょうにゅうせき
+  ctx.fillStyle = '#3a2e22';
+  for (let i = 0; i < 12; i++) {
+    const x = i * 80 + 40;
+    const w = 26 + (i % 3) * 10;
+    const h = 35 + ((i * 7) % 50);
+    ctx.beginPath();
+    ctx.moveTo(x - w/2, 0);
+    ctx.lineTo(x + w/2, 0);
+    ctx.lineTo(x, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ひかるクリスタル
+  const crystals = [
+    {x:60,  y:220, c:'#ff7eb6'},
+    {x:830, y:240, c:'#7ec8ff'},
+    {x:30,  y:480, c:'#7ec8ff'},
+    {x:870, y:470, c:'#a0ff80'},
+    {x:450, y:500, c:'#ff7eb6'},
+  ];
+  crystals.forEach(c => drawCrystal(c.x, c.y, c.c));
+
+  // ゆか
+  ctx.fillStyle = '#0a0606';
+  ctx.fillRect(0, H - 50, W, 50);
+}
+
+function drawCrystal(x, y, color) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 14);
+  ctx.lineTo(x + 7, y);
+  ctx.lineTo(x, y + 14);
+  ctx.lineTo(x - 7, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBgCastle() {
+  // たそがれの空
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a1040');
+  grad.addColorStop(0.5, '#5a2a60');
+  grad.addColorStop(1, '#a04060');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // つき
+  ctx.fillStyle = 'rgba(255, 248, 200, 0.3)';
+  ctx.beginPath();
+  ctx.arc(160, 100, 38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff8c0';
+  ctx.beginPath();
+  ctx.arc(160, 100, 28, 0, Math.PI * 2);
+  ctx.fill();
+
+  // おしろのシルエット
+  ctx.fillStyle = '#0a0820';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, 350);
+  ctx.lineTo(80, 350);
+  ctx.lineTo(80, 280);
+  ctx.lineTo(120, 280);
+  ctx.lineTo(120, 250);
+  ctx.lineTo(160, 250);
+  ctx.lineTo(160, 280);
+  ctx.lineTo(200, 280);
+  ctx.lineTo(200, 350);
+  ctx.lineTo(360, 350);
+  ctx.lineTo(360, 200);
+  ctx.lineTo(400, 200);
+  ctx.lineTo(400, 160);
+  ctx.lineTo(460, 160);
+  ctx.lineTo(460, 200);
+  ctx.lineTo(500, 200);
+  ctx.lineTo(500, 350);
+  ctx.lineTo(680, 350);
+  ctx.lineTo(680, 280);
+  ctx.lineTo(720, 280);
+  ctx.lineTo(720, 240);
+  ctx.lineTo(760, 240);
+  ctx.lineTo(760, 280);
+  ctx.lineTo(800, 280);
+  ctx.lineTo(800, 350);
+  ctx.lineTo(W, 350);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  // タワーの旗
+  ctx.fillStyle = '#cc0030';
+  ctx.fillRect(138, 226, 4, 24);
+  ctx.beginPath();
+  ctx.moveTo(142, 226); ctx.lineTo(160, 232); ctx.lineTo(142, 238); ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(428, 136, 4, 24);
+  ctx.beginPath();
+  ctx.moveTo(432, 136); ctx.lineTo(450, 142); ctx.lineTo(432, 148); ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(738, 216, 4, 24);
+  ctx.beginPath();
+  ctx.moveTo(742, 216); ctx.lineTo(760, 222); ctx.lineTo(742, 228); ctx.closePath();
+  ctx.fill();
+}
+
+// ─── ステージ（足場）描画 ───
+function drawStagePlatform() {
+  switch (currentStage.type) {
+    case 'space':  drawStageSpace();  break;
+    case 'magma':  drawStageMagma();  break;
+    case 'ship':   drawStageShip();   break;
+    case 'cave':   drawStageCave();   break;
+    case 'castle': drawStageCastle(); break;
+  }
+}
+
+function drawStageSpace() {
+  const sg = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  sg.addColorStop(0, '#aab8d6');
+  sg.addColorStop(0.5, '#5a6a99');
+  sg.addColorStop(1, '#2a3550');
+  ctx.fillStyle = sg;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  ctx.fillStyle = '#ffe44d';
+  ctx.fillRect(stage.x, stage.y, stage.w, 4);
+  ctx.fillStyle = '#1a2030';
+  for (let i = 0; i < 8; i++) ctx.fillRect(stage.x + 30 + i * 70, stage.y + stage.h - 8, 40, 4);
+  ctx.fillStyle = 'rgba(74, 144, 255, 0.3)';
+  ctx.fillRect(stage.x, stage.y + stage.h, stage.w, 30);
+}
+
+function drawStageMagma() {
+  const sg = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  sg.addColorStop(0, '#5a4030');
+  sg.addColorStop(0.5, '#3a2010');
+  sg.addColorStop(1, '#1a0808');
+  ctx.fillStyle = sg;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  // ごつごつした上面
+  ctx.fillStyle = '#7a5040';
+  ctx.fillRect(stage.x, stage.y, stage.w, 4);
+  for (let i = 0; i < 18; i++) {
+    ctx.fillRect(stage.x + i * 33 + (i % 2) * 8, stage.y - 2, 18, 4);
+  }
+  // 下の赤いひびわれ
+  ctx.fillStyle = '#ff4500';
+  for (let i = 0; i < 8; i++) {
+    ctx.fillRect(stage.x + 25 + i * 70, stage.y + stage.h - 6, 45, 3);
+  }
+  ctx.fillStyle = 'rgba(255, 100, 0, 0.4)';
+  ctx.fillRect(stage.x, stage.y + stage.h, stage.w, 30);
+}
+
+function drawStageShip() {
+  // 木のデッキ
+  const sg = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  sg.addColorStop(0, '#a8702a');
+  sg.addColorStop(1, '#5a3a18');
+  ctx.fillStyle = sg;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  // いたの線
+  ctx.strokeStyle = '#3a2010';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 12; i++) {
+    ctx.beginPath();
+    ctx.moveTo(stage.x + i * 50, stage.y);
+    ctx.lineTo(stage.x + i * 50, stage.y + stage.h);
+    ctx.stroke();
+  }
+  // 金属トリム
+  ctx.fillStyle = '#888';
+  ctx.fillRect(stage.x, stage.y, stage.w, 3);
+  // 船べり（左右）
+  ctx.fillStyle = '#5a3a18';
+  ctx.fillRect(stage.x - 22, stage.y, 22, 80);
+  ctx.fillRect(stage.x + stage.w, stage.y, 22, 80);
+  // ロープのデコ
+  ctx.strokeStyle = '#d8b070';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(stage.x, stage.y + 15);
+  ctx.lineTo(stage.x + stage.w, stage.y + 15);
+  ctx.stroke();
+}
+
+function drawStageCave() {
+  const sg = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  sg.addColorStop(0, '#8a8270');
+  sg.addColorStop(0.5, '#5a5040');
+  sg.addColorStop(1, '#2a2018');
+  ctx.fillStyle = sg;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  // コケ
+  ctx.fillStyle = '#3a8030';
+  ctx.fillRect(stage.x, stage.y, stage.w, 4);
+  for (let i = 0; i < 12; i++) {
+    ctx.fillRect(stage.x + i * 50 + 5, stage.y - 2, 12, 3);
+  }
+  // 下の小石
+  ctx.fillStyle = '#4a4030';
+  for (let i = 0; i < 10; i++) {
+    ctx.fillRect(stage.x + 20 + i * 60, stage.y + stage.h - 6, 30, 3);
+  }
+}
+
+function drawStageCastle() {
+  const sg = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
+  sg.addColorStop(0, '#b0b0b0');
+  sg.addColorStop(1, '#404040');
+  ctx.fillStyle = sg;
+  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
+  // 上のクレネレーション
+  ctx.fillStyle = '#909090';
+  for (let i = 0; i < 12; i++) {
+    ctx.fillRect(stage.x + i * 50, stage.y - 7, 28, 7);
+  }
+  // レンガ
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 1;
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 13; c++) {
+      ctx.strokeRect(stage.x + c * 50 + (r % 2) * 25 - 25, stage.y + 5 + r * 12, 50, 12);
+    }
+  }
+}
+
 let shake = 0;
 
 function draw() {
@@ -536,60 +1001,10 @@ function draw() {
     if (shake < 0.5) shake = 0;
   }
 
-  // 背景：宇宙
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, '#0a0a3a');
-  grad.addColorStop(1, '#000010');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // 星
-  stars.forEach(s => {
-    ctx.globalAlpha = 0.5 + Math.sin(s.tw) * 0.4;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.globalAlpha = 1;
-
-  // 惑星
-  planets.forEach(pl => {
-    const g = ctx.createRadialGradient(pl.x - pl.r/3, pl.y - pl.r/3, 1, pl.x, pl.y, pl.r);
-    g.addColorStop(0, pl.c1);
-    g.addColorStop(1, pl.c2);
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(pl.x, pl.y, pl.r, 0, Math.PI * 2);
-    ctx.fill();
-    // 土星のリング風
-    if (pl === planets[0]) {
-      ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.ellipse(pl.x, pl.y, pl.r * 1.6, pl.r * 0.4, -0.3, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  });
-
-  // ステージ（宇宙基地っぽく）
-  const stageGrad = ctx.createLinearGradient(0, stage.y, 0, stage.y + stage.h);
-  stageGrad.addColorStop(0, '#aab8d6');
-  stageGrad.addColorStop(0.5, '#5a6a99');
-  stageGrad.addColorStop(1, '#2a3550');
-  ctx.fillStyle = stageGrad;
-  ctx.fillRect(stage.x, stage.y, stage.w, stage.h);
-  // ステージのフチ
-  ctx.fillStyle = '#ffe44d';
-  ctx.fillRect(stage.x, stage.y, stage.w, 4);
-  // ステージ下のメカ模様
-  ctx.fillStyle = '#1a2030';
-  for (let i = 0; i < 8; i++) {
-    ctx.fillRect(stage.x + 30 + i * 70, stage.y + stage.h - 8, 40, 4);
-  }
-  // ステージ下のグロー
-  ctx.fillStyle = 'rgba(74, 144, 255, 0.3)';
-  ctx.fillRect(stage.x, stage.y + stage.h, stage.w, 30);
+  // 背景（ステージごと）
+  drawBackground();
+  drawBgParticles();
+  drawStagePlatform();
 
   // ファイター描画
   drawFighter(p2);
@@ -1043,17 +1458,17 @@ function drawUI() {
   ctx.fillStyle = 'rgba(0, 0, 30, 0.7)';
   ctx.strokeStyle = '#ffe44d';
   ctx.lineWidth = 3;
-  ctx.fillRect(W/2 - 90, 12, 180, 38);
-  ctx.strokeRect(W/2 - 90, 12, 180, 38);
+  ctx.fillRect(W/2 - 110, 12, 220, 50);
+  ctx.strokeRect(W/2 - 110, 12, 220, 50);
   ctx.fillStyle = '#ffe44d';
   ctx.font = 'bold 22px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('WAVE ' + wave, W/2, 31);
+  ctx.fillText('WAVE ' + wave + '  -  ' + currentStage.name, W/2, 30);
   // たおした数
   ctx.fillStyle = '#aaccff';
   ctx.font = 'bold 12px sans-serif';
-  ctx.fillText('たおした: ' + score, W/2, 46);
+  ctx.fillText('たおした: ' + score, W/2, 50);
   ctx.restore();
 }
 
