@@ -106,7 +106,8 @@
   <strong>うごく:</strong> <span class="key">←</span><span class="key">→</span>
   <strong>ジャンプ:</strong> <span class="key">↑</span> または <span class="key">スペース</span>
   <strong>こうげき:</strong> <span class="key">Z</span>
-  <strong>つよいこうげき:</strong> <span class="key">X</span><br>
+  <strong>つよいこうげき:</strong> <span class="key">X</span>
+  <strong>ぼうぎょ:</strong> <span class="key">↓</span><br>
   ※ ステージから おちたら まけ！ ダメージが おおいほど とおくに ふきとぶよ！<br>
   ★ てきを たおすと どんどん つよい てきが でてくる！ どこまで いける？
 </div>
@@ -214,6 +215,10 @@ function makeFighter(opts) {
     kbMul: opts.kbMul || 1.0,
     aiCool: opts.aiCool || 1.0,
     aggression: opts.aggression != null ? opts.aggression : 0.5,
+    // 防御
+    shielding: false,
+    shieldMeter: 100, // 0-100
+    shieldBroken: 0,  // 残りスタンフレーム
   };
 }
 
@@ -285,8 +290,8 @@ function nextWave() {
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
-  // ジャンプとアタックは押した瞬間判定
-  if (gameState === 'play' && !p1.hitstun) {
+  // ジャンプとアタックは押した瞬間判定（防御中は不可）
+  if (gameState === 'play' && !p1.hitstun && !p1.shielding) {
     if ((e.key === 'ArrowUp' || e.key === ' ') && p1.onGround) {
       p1.vy = -13;
       p1.onGround = false;
@@ -379,11 +384,35 @@ function update() {
   // 星のキラキラ
   stars.forEach(s => s.tw += 0.05);
 
-  // P1 入力
-  if (p1.hitstun <= 0) {
+  // P1 シールド入力（地上のみ・スタン中不可）
+  const wantShield = !!keys['arrowdown'];
+  if (p1.hitstun <= 0 && p1.shieldBroken <= 0 && p1.onGround && wantShield && p1.shieldMeter > 5) {
+    p1.shielding = true;
+  } else {
+    p1.shielding = false;
+  }
+
+  // P1 入力（防御中は移動できない）
+  if (p1.hitstun <= 0 && !p1.shielding) {
     if (keys['arrowleft']) { p1.vx -= 0.6 * p1.speedMul; p1.facing = -1; }
     if (keys['arrowright']) { p1.vx += 0.6 * p1.speedMul; p1.facing = 1; }
   }
+
+  // シールドゲージ更新（両者共通：CPUは shielding=false 固定なので回復のみ）
+  [p1, p2].forEach(f => {
+    if (f.shielding) {
+      f.shieldMeter = Math.max(0, f.shieldMeter - 0.6);
+      if (f.shieldMeter <= 0) {
+        f.shielding = false;
+        f.shieldBroken = 60;
+        f.hitstun = 60;
+        if (f === p1) announce('シールドこわれた！', 50);
+      }
+    } else {
+      f.shieldMeter = Math.min(100, f.shieldMeter + 0.4);
+      if (f.shieldBroken > 0) f.shieldBroken--;
+    }
+  });
 
   // CPU
   updateCPU(p2, p1);
@@ -500,7 +529,38 @@ function checkHit(attacker, defender) {
   const dTop = defender.y - defender.h;
   const dBot = defender.y;
   if (a.x < dRight && a.x + a.w > dLeft && a.y < dBot && a.y + a.h > dTop) {
-    // ヒット
+    if (defender.shielding) {
+      // 防御！ ダメージ・ノックバック大幅軽減
+      defender.damage += a.dmg * 0.25;
+      const kbForce = (a.kb + defender.damage * 0.04) * 0.25;
+      defender.vx = attacker.facing * kbForce;
+      defender.vy = -kbForce * 0.4;
+      defender.hitstun = 8;
+      defender.shieldMeter = Math.max(0, defender.shieldMeter - (a.strong ? 35 : 20));
+      attacker.attackBox = null;
+      // ガードエフェクト（青）
+      for (let i = 0; i < 10; i++) {
+        particles.push({
+          x: defender.x,
+          y: defender.y - defender.h/2,
+          vx: (Math.random() - 0.5) * 5,
+          vy: (Math.random() - 0.5) * 5 - 1,
+          life: 18 + Math.random() * 8,
+          color: '#7ec8ff',
+          r: 2 + Math.random() * 2
+        });
+      }
+      shake = 3;
+      // ガード中にメーター切れたらブレイク
+      if (defender.shieldMeter <= 0) {
+        defender.shielding = false;
+        defender.shieldBroken = 60;
+        defender.hitstun = 60;
+        if (defender === p1) announce('シールドこわれた！', 50);
+      }
+      return;
+    }
+    // 通常ヒット
     defender.damage += a.dmg;
     const kbForce = a.kb + defender.damage * 0.08;
     defender.vx = attacker.facing * kbForce;
@@ -520,7 +580,6 @@ function checkHit(attacker, defender) {
       });
     }
     if (a.strong) {
-      // 画面シェイク用
       shake = 10;
     } else {
       shake = 4;
@@ -1010,6 +1069,28 @@ function draw() {
   drawFighter(p2);
   drawFighter(p1);
 
+  // シールドバブル
+  [p1, p2].forEach(f => {
+    if (f.shielding) {
+      ctx.save();
+      const meter = f.shieldMeter / 100;
+      const r = (28 + 16 * meter) * f.size + Math.sin(performance.now() * 0.015) * 1.5;
+      const cy = f.y - f.h / 2;
+      const grad = ctx.createRadialGradient(f.x, cy, r * 0.3, f.x, cy, r);
+      grad.addColorStop(0, 'rgba(180, 230, 255, 0.15)');
+      grad.addColorStop(0.7, 'rgba(126, 200, 255, 0.45)');
+      grad.addColorStop(1, 'rgba(126, 200, 255, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(f.x, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 + meter * 0.4) + ')';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+  });
+
   // 攻撃ヒットボックス（エフェクト）
   [p1, p2].forEach(f => {
     if (f.attackBox) {
@@ -1449,9 +1530,9 @@ function drawBoss(f, armAngle, bob) {
 
 function drawUI() {
   // P1 パネル
-  drawPlayerPanel(30, H - 90, p1, '1Pくん');
+  drawPlayerPanel(30, H - 105, p1, '1Pくん');
   // P2 パネル
-  drawPlayerPanel(W - 230, H - 90, p2, 'てき');
+  drawPlayerPanel(W - 230, H - 105, p2, 'てき');
 
   // ウェーブ表示（中央うえ）
   ctx.save();
@@ -1473,12 +1554,13 @@ function drawUI() {
 }
 
 function drawPlayerPanel(x, y, f, label) {
+  const PH = 90; // パネル高さ（シールドゲージ分すこし広く）
   // 背景
   ctx.fillStyle = 'rgba(0, 0, 30, 0.7)';
-  ctx.fillRect(x, y, 200, 75);
+  ctx.fillRect(x, y, 200, PH);
   ctx.strokeStyle = f.color;
   ctx.lineWidth = 3;
-  ctx.strokeRect(x, y, 200, 75);
+  ctx.strokeRect(x, y, 200, PH);
 
   // 名前
   ctx.fillStyle = f.color;
@@ -1500,6 +1582,24 @@ function drawPlayerPanel(x, y, f, label) {
     const hy = y + 50;
     drawHeart(hx, hy, i < f.lives ? f.color : '#333');
   }
+
+  // シールドゲージ
+  ctx.fillStyle = '#aaccff';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.fillText('SHIELD', x + 10, y + 76);
+  const sBarX = x + 65, sBarY = y + 68, sBarW = 125, sBarH = 9;
+  ctx.fillStyle = '#222';
+  ctx.fillRect(sBarX, sBarY, sBarW, sBarH);
+  const meterPct = f.shieldMeter / 100;
+  let barColor;
+  if (f.shieldBroken > 0) barColor = '#ff4081';
+  else if (f.shielding) barColor = '#ffffff';
+  else barColor = '#7ec8ff';
+  ctx.fillStyle = barColor;
+  ctx.fillRect(sBarX, sBarY, sBarW * meterPct, sBarH);
+  ctx.strokeStyle = '#5a7090';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(sBarX, sBarY, sBarW, sBarH);
 }
 
 function drawHeart(cx, cy, color) {
